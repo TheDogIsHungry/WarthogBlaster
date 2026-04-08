@@ -24,7 +24,7 @@
 // Brake Setting (ms).
 #define off 1100
 #define low 2000
-#define med 1000
+#define med 800
 #define high 400
 
 // 3 Position Switch.
@@ -59,23 +59,25 @@ uint8_t switchPos;
 
 BidirDShotX1 *esc1;
 BidirDShotX1 *esc2;
-uint16_t escThrottle = 0; //sent to esc
+double escThrottle = 0; //sent to esc
 int power1 = 0; //flag that activates esc core
 int power2 = 0;
 uint32_t rpm = 0; //tracking motor speed
 bool motorStabilized = false; //flag for motor reaching desired speed
-int expectedRpm = 0;
+int targetRpm = 0;
 int desiredBrakeTime[4] = {off, low, med, high};       // OFF, Low, Med, High. This represents the desired brake time in ms.
 int currentThrottle = 0; //tracking braking calculations
 unsigned long currentMillis = 0; //this is used to track time after last dart, so when moved to hang it knows time since last
+unsigned long PIDMillis = 0;
 int brakeIncrement = 0; //post calculation throttle subtraction
 bool firstRun = true;
 bool idleCap = false;
+bool brakeReady = true;
 static uint8_t telemetryCounter = 0;
 int rpmCap = 100000; //100k rpm cap
-
-uint16_t current = 0;
 uint32_t returnValue = 0;
+bool autoMinFire = false; // Variable to ensure at least one dart is fired on full auto mode.
+
 // Solenoid Variables ======================================================================
 
 int dartQueue = 0; //dart cache
@@ -169,7 +171,7 @@ void errorCode(int errorMajor) {
       delay(50);
     }
     delay(500);
-  } //Loop for eternity, there's nothing more to be done, it's over.
+  } //Loop for eternity, there's nothing more to be done, it's joever.
 }
 
 static void manageTrigger(uint8_t btnId, uint8_t btnState){
@@ -185,9 +187,14 @@ static void manageTrigger(uint8_t btnId, uint8_t btnState){
       dartQueue++; //add 2nd dart
       binaryhold = 0;  //stop the binaryhold thats keeping the system revved
     }else if(modeSetting == AUTO){ //if auto, and the trigger was released, remove all darts from queue
-      dartQueue = 0;
-      digitalWrite(solenoid_mosfet, LOW);              // make sure solenoid goes low
-      pushState = IDLE; 
+      if(autoMinFire) {                                 // Make sure that at least one dart fires if the trigger is pressed for a moment on full auto.
+        dartQueue = 1;
+      } else {                                          // Else, shut it off!!
+        dartQueue = 0;
+        digitalWrite(solenoid_mosfet, LOW);              // make sure solenoid goes low
+        pushState = IDLE; 
+        currentMillis = millis(); 
+      }
     }
   } else if(btnState != BTN_PRESSED && !wasTriggered){ //start here. pressed
     switch (modeSetting){
@@ -200,6 +207,7 @@ static void manageTrigger(uint8_t btnId, uint8_t btnState){
         binaryhold = 0;
         break;
       case AUTO:  //auto, adds a amount higher than any mag to allow for a full dump but will auto stop if something goes wrong
+        autoMinFire = true; 
         dartQueue = 60;
         binaryhold = 0;
         break;
@@ -240,8 +248,8 @@ uint8_t getSwitchPosition() {
    return 0;
 }
 
-int expectedRPM(int speed){ //relates requested speed to rpm motors should go to
-  int RPM = (990 * speed - 1000);
+int targetRPM(int speed){ //relates requested speed to rpm motors should go to
+  int RPM = (350 * speed);
   return RPM;
 }
 
@@ -293,7 +301,6 @@ void closedFire(){
       }
       dartQueue--;
       dartsFired++;
-      updateAmmoCounter(dartsFired);
     }
   }
   if(dartQueue == 0){ //we just subtracted the last dart in queue above, take timestamp for spindown. a new timestamp shouldnt be taken as this wont update until queue is 0 after fire is called again 
@@ -322,7 +329,6 @@ void openFire(){
         dartsFired++;
         pushState = IDLE;           //Go back to idle and let the main loop sort out whether we need to fire another dart. Technically might introduce a few microseconds of delay but the testing done on the solenoid timings should cancel this out so whatever
         timeInPushState = millis(); 
-        updateAmmoCounter(dartsFired);
       }
     }
 
@@ -377,6 +383,7 @@ void setup(){
   Serial.println(" ");
   Serial.println("Setup complete");
   Serial.print("\n\n\n");
+  currentMillis = millis(); // Initial reading.
 }
 void setup1(){
   esc1 = new BidirDShotX1(escPin1, 600);
@@ -384,6 +391,8 @@ void setup1(){
   Serial.println("esc setup");
 }
 
+double integral, previous = 0;
+bool PIDRun;
 
 void loop() {
 
@@ -406,13 +415,6 @@ void loop() {
   BETA removed because no battery yet
   (voltageRead() > 13.5) ? mainScreen() : lowbatteryScreen();
   */ 
-
- switchPos = getSwitchPosition();
- if(switchPos != switchPosPrev) {
-   loadvalues(switchPos); 
-   mainScreen();
- }
- switchPosPrev = switchPos;
 
   if (!BUTTONHIGH && escThrottle == 0 && pushState == IDLE) {                   // If encoder button is pressed, ground signal sent, also ensure motor and solenoid are at rest.
     settingsMenu();                    // Break to settings menu.  
@@ -440,14 +442,13 @@ void loop() {
   //Serial.print("hangtimeSetting: ");
   //Serial.println(hangtimeSetting);
 
- 
-  if(dartQueue > 0){  //darts in queue, move to main firing actions
+
+  if(dartQueue > 0) {  //darts in queue, move to main firing actions
     delaySolenoid = delayCalc(dpsSetting);  //calculate delay with previously loaded values
-    expectedRpm = expectedRPM(motorspeedSetting); //target for motors
-    power1 = motorspeedSetting;
-    power2 = motorspeedSetting;
-    currentThrottle = power1 * 20; //for braking calc
-    if(motorStabilized){
+    targetRpm = targetRPM(motorspeedSetting); //target for motors
+    PIDRun = true;
+    if(motorStabilized) {
+      autoMinFire = false;
       if(errorCount < maxError){
         closedFire();
       }
@@ -456,85 +457,113 @@ void loop() {
       }
     }
   }
-  else{ //spindown
-    if((currentMillis + hangtimeSetting - 300) < millis() && (modeSetting != BINARY || binaryhold == 0) && (menuState == "Main Menu")){
-      power1 = idleSetting;
-      power2 = idleSetting;
+  else { // Spindown
+    if((currentMillis + hangtimeSetting - 300) < millis() && (modeSetting != BINARY || binaryhold == 0) && (menuState == "Main Menu")) {
+    PIDRun = false; 
+    switchPos = getSwitchPosition();
+     if(switchPos != switchPosPrev) {
+       loadvalues(switchPos); 
+       mainScreen();
+       brakeReady = true;
+       idleCap = false;
+    }
+    switchPosPrev = switchPos;
+     if(dartsFiredPrev != dartsFired) {
+       updateAmmoCounter(dartsFired, dartsFiredPrev);
+       dartsFiredPrev = dartsFired; 
+     }
     }
   }
 }
 
+double actual;
+double error; 
+double proportional;
+double derivative;  
+
+double dt;
+double last_time = 0;
+double kp = 0.05;
+double ki = 0.001;
+double kd = 0.08;
+
+
 void loop1() { //motor core, should be core1 in main code
-	delayMicroseconds(120);
-  if(power1 > idleSetting){        //spinup control, compares %, EX: 50% > 20%
-    escThrottle = power1 * 20;    // Converting from 1-100% to 0 - 2000 range.
-    idleCap = 0;
-    //Serial.print(millis());
-    //Serial.print("\t");
-    //Serial.println(rpm);
+	delayMicroseconds(200);
+
+
+  PIDMillis = micros(); 
+  dt = (PIDMillis - last_time) / 1000;
+  last_time = PIDMillis;
+	esc1->getTelemetryErpm(&rpm);
+	rpm /= MOTOR_POLES / 2; // eRPM = RPM * poles/2
+
+  if(PIDRun) {
+  actual = rpm;
+  error = targetRpm - actual;
+
+  proportional = error;
+  integral += error * dt;
+  derivative = (error - previous) / dt;
+  previous = error;
+  if(targetRpm == 0) {
+    escThrottle  = 0;
+  } else {
+  escThrottle  = (kp * proportional) + (ki * integral) + (kd * derivative);
+  brakeReady = true;
+  idleCap = false;
   }
-  else{ //should be spinning down
 
-    if(escThrottle >= 1 && idleCap == 0){ //start braking
-      if(escThrottle <= (idleSetting * 20) + (2 * round((currentThrottle - idleSetting * 20) / (desiredBrakeTime[brakeSetting] /7.2)))){ //calc to smooth out lower end stutter
+  } else {
 
-        escThrottle = (idleSetting * 20);
-        idleCap = 1;
+    if(brakeReady == true) {
+      currentThrottle = rpm / 50;
+      escThrottle = currentThrottle;  // Set escThrottle to whatever RPM we are currently at.
+      brakeReady = false;
+    }
+
+    if(escThrottle >= 1 && idleCap == false) { //start braking
+      if(escThrottle <= (idleSetting * 7) + (2 * abs(round((currentThrottle - idleSetting * 20) / (desiredBrakeTime[brakeSetting] /7.2))))){ //calc to smooth out lower end stutter
+        escThrottle = (idleSetting * 7);
+        idleCap = true;
       }
       delayMicroseconds(7000); //decrement every 7ms
-      brakeIncrement = round((currentThrottle - idleSetting * 20) / (desiredBrakeTime[brakeSetting] / 7.2)); //linear match for brake amount to speed to keep in time
+      brakeIncrement = round((currentThrottle - idleSetting * 7) / (desiredBrakeTime[brakeSetting] / 7.2)); //linear match for brake amount to speed to keep in time
       if(brakeIncrement < 1 || desiredBrakeTime[brakeSetting] == off) {                 //for lower throttles at higher times, or if brakeSetting is off
         brakeIncrement = 1;
       }
       //Serial.println(brakeIncrement); 
-      escThrottle -= brakeIncrement;
-      
+      escThrottle -= brakeIncrement;  
+      if(escThrottle < 0) {escThrottle = 0;}
     }
-    // SAFETY CHECK.
-    if(escThrottle > 2000 || escThrottle <= 0){ //>2000 is when the escThrottle overflows to its max value because of 0-1 on the int, < 0 is for the motorStabilized flag
-      //motorStabilized = false; //should be stopped so motors arent stabilized
-      escThrottle = 0; //make sure to drop escThrottle
-      rpm = 0; //reset rpm as it doesn't automatically
-    }
-
   }
-  
-  esc1->sendThrottle(escThrottle); //main thing that turns on motor
-  esc2->sendThrottle(escThrottle);
-	esc1->getTelemetryErpm(&rpm);
-	rpm /= MOTOR_POLES / 2; // eRPM = RPM * poles/2
-  Serial.print(millis());
-  Serial.print("\t");
-  Serial.print(rpm);
-  Serial.print("\t");
-  Serial.println(current);
-  /*if (++telemetryCounter >= 10) { // every 10 loops (~2ms at 200µs delay)
-    esc1->getTelemetryErpm(&rpm);
-    rpm /= MOTOR_POLES / 2;
-    if(rpm > rpmCap){
-      rpm = 0;
-    }
-    telemetryCounter = 0;
-    BidirDshotTelemetryType type = esc1->getTelemetryPacket(&returnValue);
-    switch (type){
-      case BidirDshotTelemetryType::CURRENT:
-        current = returnValue;
-        break;
-    }
-    Serial.print(millis());
+
+  esc1->sendThrottle(max(0, min(1999, static_cast<int32_t>(escThrottle)))); //main thing that turns on motor
+
+    if(escThrottle > 0) {
+    Serial.print(PIDMillis);
+    Serial.print("\t");
+    Serial.print(dt);
     Serial.print("\t");
     Serial.print(rpm);
     Serial.print("\t");
-    Serial.println(current);
-  }*/
-  if(rpm >= (expectedRpm - 400)){
+    Serial.println(escThrottle);
+    /*Serial.print("\t");
+    Serial.print(dt);
+    Serial.print("\t");
+    Serial.println(targetRpm);*/
+    }
+
+
+  if(targetRpm > 0 && rpm >= (targetRpm - 150)){
     //
+    Serial.println("HELLO WE ARE STABALIZED");
     motorStabilized = true;
   }
   else if(binaryhold == 0 && motorState != "hang"){
     motorStabilized = false;
   }
-  
+
 
   //Serial.println(escThrottle);
   if(motorStabilized == 1){
