@@ -60,8 +60,6 @@ uint8_t switchPos;
 BidirDShotX1 *esc1;
 BidirDShotX1 *esc2;
 double escThrottle = 0; //sent to esc
-int power1 = 0; //flag that activates esc core
-int power2 = 0;
 uint32_t rpm = 0; //tracking motor speed
 bool motorStabilized = false; //flag for motor reaching desired speed
 int targetRpm = 0;
@@ -94,13 +92,73 @@ unsigned long timeInPushState = 0; //timing for open loop
 int openDelay; //open loop calc
 
 // FUNCTIONS =================================================================================
+unsigned long noidStart = 0;
+unsigned long noidEnd = 0;
 
 void selfTest(){
+
+  //   -----Solenoid Testing-----
+  delay(1000); //wait, ensure everthime else is chill
+  Serial.println("noid time");
+  digitalWrite(solenoid_mosfet, HIGH); //power solenoid, moving foward
+  noidStart = millis(); //start time
+  Serial.print("First Timestamp: ");
+  Serial.println(noidStart);
+
+
+  while(digitalRead(frontHall) == HIGH) {} //While front hall effect is NOT triggered, do nothing
+  digitalWrite(solenoid_mosfet, LOW); //turn the john off
+
+  while(digitalRead(backHall) == HIGH) {} //do nothing until backhall retriggered
+  noidEnd = millis();
+  Serial.print("Second Timestamp: ");
+  Serial.println(noidEnd);
+
+  cycleTime = noidEnd - noidStart; //time for cold cycle
+  Serial.print("Cold Cycle Time: ");
+  Serial.print(cycleTime);
+  Serial.println("ms");
+
+
+  Serial.println("starting warm up!"); 
+  delay(500);
+
+  for (int i=0; i < 6; i++){
+    if(i == 5){ //proper read time after warming up
+      delay(50);
+      digitalWrite(solenoid_mosfet, HIGH);
+      noidStart = millis();
+      while(digitalRead(frontHall) == HIGH) {} //While front hall effect is NOT triggered, do nothing
+      digitalWrite(solenoid_mosfet, LOW); //turn the john off
+
+      while(digitalRead(backHall) == HIGH) {} //do nothing until backhall retriggered
+      noidEnd = millis();
+      cycleTime = noidEnd - noidStart; //time for warm cycle
+      Serial.print("warm cycle Time: ");
+      Serial.print(cycleTime);
+      Serial.println("ms");
+    }
+    else{ //5 warm up cycles
+      digitalWrite(solenoid_mosfet, HIGH);
+      delay(cycleTime*.75);
+      digitalWrite(solenoid_mosfet, LOW);
+      delay(cycleTime*.25);
+    }
+
+
+    
+  }
+
+
+
+
+
+  /*
   delay(200);
   //Motor wiring check
   motorspeedSetting = 5;
-  power1 = motorspeedSetting;
-  power2 = motorspeedSetting;
+  //power1 = motorspeedSetting;
+  //power2 = motorspeedSetting;
   delay(200);
   Serial.println(rpm);
   delay(200);
@@ -111,12 +169,12 @@ void selfTest(){
   else{
     errorCode(1);
   }
-  power1 = 0;
-  power2 = 0;
+  //power1 = 0;
+  //power2 = 0;
   delay(900);
   motorspeedSetting = 20;
-  power1 = motorspeedSetting;
-  power2 = motorspeedSetting;
+  //power1 = motorspeedSetting;
+  //power2 = motorspeedSetting;
   delay(200);
   Serial.println(rpm);
   delay(200);
@@ -127,9 +185,16 @@ void selfTest(){
   else{
     errorCode(2);
   }
-    power1 = 0;
-    power2 = 0;                                                    
+    //power1 = 0;
+    //power2 = 0;                                                    
+*/
 
+
+
+
+
+
+  
 }
 
 void errorCode(int errorMajor) {
@@ -248,8 +313,8 @@ uint8_t getSwitchPosition() {
    return 0;
 }
 
-int targetRPM(int speed){ //relates requested speed to rpm motors should go to
-  int RPM = (350 * speed);
+int targetRPM(int motorSpeedPercentage){ //relates requested speed to rpm motors should go to
+  int RPM = (348 * motorSpeedPercentage);
   return RPM;
 }
 
@@ -280,7 +345,7 @@ void closedFire(){
   if(pushState == RETRACTING && (millis() - firstTimeStamp) > 300){ //didnt retract(jam), or back hall sensor failed
     digitalWrite(solenoid_mosfet, LOW); //just incase emergency stop
     errorCount ++;
-    Serial.print("error #: ");
+    Serial.print("error #: "); 
     Serial.println(errorCount);
     pushState = IDLE;
     dartQueue--; //a dart did fire so we make sure to log
@@ -397,9 +462,13 @@ bool PIDRun;
 void loop() {
 
   if( firstRun == true){ 
-    Serial.println("self testing...");
-    delay(2000);
-    //selfTest();
+    delay(1000);
+    if(digitalRead(trigger) == HIGH){
+      Serial.println("self testing...");
+      selfTestScreen();
+      selfTest();
+    }
+    //selfTest(); //BETA change this so that it only self tests when boot with trigger pull or smth
     Serial.println("finished self testing");
     //speed = motorspeedSetting; //after testing, set esc to current mode speed
     Serial.print("Now loading new speed: ");
@@ -517,18 +586,18 @@ void loop1() { //motor core, should be core1 in main code
   } else {
 
     if(brakeReady == true) {
-      currentThrottle = rpm / 50;
+      currentThrottle = rpm / 29;
       escThrottle = currentThrottle;  // Set escThrottle to whatever RPM we are currently at.
       brakeReady = false;
     }
 
     if(escThrottle >= 1 && idleCap == false) { //start braking
-      if(escThrottle <= (idleSetting * 7) + (2 * abs(round((currentThrottle - idleSetting * 20) / (desiredBrakeTime[brakeSetting] /7.2))))){ //calc to smooth out lower end stutter
-        escThrottle = (idleSetting * 7);
+      if(escThrottle <= (idleSetting * 12) + (2 * abs(round((currentThrottle - idleSetting * 20) / (desiredBrakeTime[brakeSetting] /7.2))))){ //calc to smooth out lower end stutter
+        escThrottle = (idleSetting * 12);
         idleCap = true;
       }
       delayMicroseconds(7000); //decrement every 7ms
-      brakeIncrement = round((currentThrottle - idleSetting * 7) / (desiredBrakeTime[brakeSetting] / 7.2)); //linear match for brake amount to speed to keep in time
+      brakeIncrement = round((currentThrottle - idleSetting * 12) / (desiredBrakeTime[brakeSetting] / 7.2)); //linear match for brake amount to speed to keep in time
       if(brakeIncrement < 1 || desiredBrakeTime[brakeSetting] == off) {                 //for lower throttles at higher times, or if brakeSetting is off
         brakeIncrement = 1;
       }
@@ -556,8 +625,7 @@ void loop1() { //motor core, should be core1 in main code
 
 
   if(targetRpm > 0 && rpm >= (targetRpm - 150)){
-    //
-    Serial.println("HELLO WE ARE STABALIZED");
+    Serial.println("HELLO WE ARE STABALIZED 哇");
     motorStabilized = true;
   }
   else if(binaryhold == 0 && motorState != "hang"){
