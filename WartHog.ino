@@ -556,16 +556,28 @@ double kp = 0.05;
 double ki = 0.001;
 double kd = 0.08;
 
+uint32_t rpmRaw = 0;
+uint32_t rpmFilter = 0;
+const uint8_t EMAFilter = 2;
+constexpr static uint32_t half = uint32_t{1} << (EMAFilter - 1);
 
 void loop1() { //motor core, should be core1 in main code
 	delayMicroseconds(200);
 
-
   PIDMillis = micros(); 
   dt = (PIDMillis - last_time) / 1000;
   last_time = PIDMillis;
-	esc1->getTelemetryErpm(&rpm);
-	rpm /= MOTOR_POLES / 2; // eRPM = RPM * poles/2
+
+	esc1->getTelemetryErpm(&rpmRaw);
+	rpmRaw /= MOTOR_POLES / 2; // eRPM = RPM * poles/2
+
+  if( rpmRaw * 1000 > (3200 * 16800)){ //motor kV * mV
+    rpmRaw = rpm;
+  }
+  rpmFilter += rpmRaw;
+  rpm = (rpmFilter + half) >> EMAFilter; //1st-order exponential moving average
+  rpmFilter -= rpm;
+
 
   if(PIDRun) {
   actual = rpm;
@@ -625,7 +637,7 @@ void loop1() { //motor core, should be core1 in main code
 
 
   if(targetRpm > 0 && rpm >= (targetRpm - 150)){
-    Serial.println("HELLO WE ARE STABALIZED 哇");
+    //Serial.println("HELLO WE ARE STABALIZED 哇");
     motorStabilized = true;
   }
   else if(binaryhold == 0 && motorState != "hang"){
