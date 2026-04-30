@@ -87,6 +87,7 @@ uint8_t lastStateCLK;
 unsigned long lastButtonPress = 0;    // Takes timestamp of button press using millis()
 int dartsFired = 0;
 int dartsFiredPrev = 0;
+float batteryCalibration = 0.968;
 
 // FUNCTIONS ============================================================================================
 
@@ -105,7 +106,18 @@ void waitHigh() {                     // After button press, wait for it to be d
 
 
 float voltageRead() {
-  return analogRead(26) * (3.3f / 1023.0f) * 6.0f * 0.94f;  //0.94 is an adjustment for the resisotrs being out of spec
+  //return analogRead(26) * (3.3f / 1023.0f) * 6.0f * 0.94f;  //0.94 is an adjustment for the resisotrs being out of spec
+  uint16_t raw = analogRead(26);
+
+  float batteryADC_mv = (raw * 3300.0f) / 1023.0f; //ADC to mv
+  float batteryVoltage_mv = batteryADC_mv * 11.0f * 0.94f;
+
+  Serial.print("Voltage Read on ADC: ");
+  Serial.print(batteryVoltage_mv / 1000.0f);
+  Serial.println("V"); //divide printed value by actual
+
+  return ((batteryVoltage_mv / batteryCalibration) / 1000.0f);
+  
 }
 
 void display_init() {                            // Initializes screen, displays splash.
