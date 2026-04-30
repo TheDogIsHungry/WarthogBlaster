@@ -42,9 +42,9 @@
 #define RETRACTING 2
 
 // Open loop Solenoid.
-#define solenoidOn 45
-#define solenoidOff 45
-#define openDPS 10 
+#define solenoidOn 25  //safe tested 25
+#define solenoidOff 15 //safe tested 15
+#define openDPS 16
 #define maxError 5
 
 
@@ -336,7 +336,8 @@ void closedFire(){
     Serial.print("error #: ");
     Serial.println(errorCount);
     pushState = IDLE; //solenoid is back to rest
-	dartQueue = 0; //stop all action when error received
+    dartQueue = 0;
+    dartsFired++;
   }
   if(pushState == THRUSTING && digitalRead(frontHall) == LOW){ //THRUSTING, fully extended, didnt take too long
     pushState = RETRACTING; //immediately move back
@@ -383,14 +384,14 @@ void openFire(){
       timeInPushState = millis();
     }
     if(pushState == THRUSTING){     //Pusher is going forward
-      if((8 + timeInPushState + solenoidOn + (openDelay/2)) < millis()) {  //If it's all the way forward retract it
+      if((8 + timeInPushState + (openDelay/2)) < millis()) {  //If it's all the way forward retract it
         digitalWrite(solenoid_mosfet, LOW);
         pushState = RETRACTING;
         timeInPushState = millis();
       }
     }
     if(pushState == RETRACTING){    //Pusher is coming back
-      if((timeInPushState + solenoidOff + (openDelay/2)) < millis()){ //Checking if pusher is all the way back now, also use this timer to track shot delay for DPS limiting so we don't compromise the first shot
+      if((timeInPushState + (openDelay/2)) < millis()){ //Checking if pusher is all the way back now, also use this timer to track shot delay for DPS limiting so we don't compromise the first shot
         dartQueue--;                  //We have fired One(1) dart, count it
         dartsFired++;
         pushState = IDLE;           //Go back to idle and let the main loop sort out whether we need to fire another dart. Technically might introduce a few microseconds of delay but the testing done on the solenoid timings should cancel this out so whatever
@@ -623,13 +624,13 @@ void loop1() { //motor core, should be core1 in main code
   esc1->sendThrottle(max(0, min(1999, static_cast<int32_t>(escThrottle)))); //main thing that turns on motor
 
     if(escThrottle > 0) {
-    Serial.print(PIDMillis);
+    /*Serial.print(PIDMillis);
     Serial.print("\t");
     Serial.print(dt);
     Serial.print("\t");
     Serial.print(rpm);
     Serial.print("\t");
-    Serial.println(escThrottle);
+    Serial.println(escThrottle);*/
     /*Serial.print("\t");
     Serial.print(dt);
     Serial.print("\t");
