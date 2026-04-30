@@ -336,6 +336,7 @@ void closedFire(){
     Serial.print("error #: ");
     Serial.println(errorCount);
     pushState = IDLE; //solenoid is back to rest
+	dartQueue = 0; //stop all action when error received
   }
   if(pushState == THRUSTING && digitalRead(frontHall) == LOW){ //THRUSTING, fully extended, didnt take too long
     pushState = RETRACTING; //immediately move back
