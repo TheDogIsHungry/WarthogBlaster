@@ -86,6 +86,7 @@ uint8_t currentStateCLK;
 uint8_t lastStateCLK;             
 unsigned long lastButtonPress = 0;    // Takes timestamp of button press using millis()
 int dartsFired = 0;
+int dartsFiredPrev = 0;
 
 // FUNCTIONS ============================================================================================
 
@@ -102,11 +103,11 @@ void waitHigh() {                     // After button press, wait for it to be d
   } 
 }
 
-/*
+
 float voltageRead() {
-  return ((analogRead(26)) * (5.0 / 1023.0)) * ((10000.0 + 4200.0) / 4200.0); 
+  return analogRead(26) * (3.3f / 1023.0f) * 6.0f * 0.94f;  //0.94 is an adjustment for the resisotrs being out of spec
 }
-*/
+
 void display_init() {                            // Initializes screen, displays splash.
 
   Display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  
@@ -164,8 +165,8 @@ void mainScreen() {
     break;
   }
   Display.setCursor(98, 0); 
-  //  Display.print(voltageRead()); 
-  Display.print("16.8");
+  Display.print(voltageRead()); 
+  //Display.print("16.8");
   Display.print("V");
   Display.drawLine(0, 8, 128, 8, 1); 
   Display.setCursor(111 - ((profileSwitch.length() - 3) * 6), 45);// Keep "Front", "Middle", "Rear", as far right as possible. 
@@ -182,11 +183,11 @@ void mainScreen() {
   Display.display();
 }
 
-void updateAmmoCounter(int dartCount) {
+void updateAmmoCounter(int dartCount, int dartsPrev) {
   Display.setTextSize(4);
   Display.setTextColor(BLACK);
-  Display.setCursor(60  - (counterLength(dartCount - 1) * 12), 15);   // Width of characters at size 4 is 24 
-  Display.print(dartCount - 1);
+  Display.setCursor(60  - (counterLength(dartsPrev) * 12), 15);   // Width of characters at size 4 is 24 
+  Display.print(dartsPrev);
   Display.setCursor(60  - (counterLength(dartCount) * 12), 15);
   Display.setTextColor(WHITE);
   Display.print(dartCount);
@@ -326,6 +327,13 @@ int frame = 0;			    				  // Given frame of battery animation.
     frame = (frame + 1) % FRAME_COUNT;
     delay(FRAME_DELAY);
  }
+}
+
+void selfTestScreen() {
+  Display.clearDisplay();
+  Display.drawBitmap(52, 20, self_test, 24, 24, 1);
+  Display.display();
+  delay(1000);
 }
 
 
